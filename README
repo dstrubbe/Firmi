@@ -1,0 +1,47 @@
+Firmi: Get a firm grasp on your Fermi surface!
+Software utility to prepare calculated Fermi surface of metal for 3D printing.
+30 November 2015, Materials Research Society's Materials Hackathon 2015
+Dr. David Strubbe, Dept. of Materials Science and Engineering, Massachusetts Institute of Technology, dstrubbe@mit.edu
+Dr. Ryan Cooper, Materials Science and Technology Division, Oak Ridge National Laboratory, cooperrc@ornl.gov
+
+INSTALLATION:
+Requires Fortran90 compiler to compile.
+Requires OpenSCAD (GPL-2 license) installed to create STL files (available from http://www.openscad.org and many package managers).
+Edit FC and FCFLAGS in Makefile as necessary to adapt to your Fortran90 compiler, if not called 'gfortran'.
+Type 'make' to install.
+
+USAGE:
+1. Obtain 'bxsf' from an electronic structure calculation, e.g. Quantum ESPRESSO, Wannier90, etc.
+       (in XCrySDen Fermi surface file format, http://www.xcrysden.org/doc/XSF.html#__toc__14)
+2. Run 'bxsf2scad.x' on 'bxsf' producing 'bxsf.scad'. (Must have the two .data files present in working directory.)
+3. Open 'bxsf.scad' in OpenSCAD software.
+4. In OpenSCAD menu, Design->Compile, for quick view.
+5. In OpenSCAD menu, Design->Compile and Render (CGAL) [may take a while!].
+6. In OpenSCAD menu, File->Export->STL to save file.
+7. Open STL file in (e.g.) MakerBot software, adjust size, rotation, position as desired for printing.
+8. Print, and enjoy!
+
+NOTES:
+- Adjust center (via origin line in 'bxsf', as integer number of points in k-grid to displace) to make a closed
+  surface if the Fermi surface is not around the \Gamma point.
+- Using too fine a k-grid can make a surface that OpenSCAD will run out of memory trying to render, so
+  if that happens, use a coarser k-grid. Of course, the resolution of the 3D print might be less.
+- You can use the Fermi surface viewer of XCrysDen (www.xcrysden.org, GPL-2 license) to check out the
+  Fermi surface before trying to create the SCAD file.
+- The code will plot the first band in 'bxsf' that crosses the Fermi level. If you want to plot a different
+  one, then include only the band you want in 'bxsf'.
+- Fermi surfaces with open orbits may not render in OpenSCAD; further development needed for this.
+- Currently, the Fermi surface is plotted in the primitive unit cell, not the Brillouin zone.
+- The printed object is a surface enclosing a volume of lesser energy, i.e. an electron pocket.
+
+EXAMPLES:
+Calculated from examples in Wannier90 2.0.0, GPL-2 license, interpolating to finer k-grid from DFT-LDA calculations with Quantum ESPRESSO
+fcc lead, 20x20x20 k-grid, Wannier90 example02. OpenSCAD step may take ~7 minutes.
+fcc copper, 20x20x20 k-grid, Wannier90 example04. OpenSCAD step may take ~19 minutes.
+
+License = GPL-2 (see LICENSE file)
+Code based in part on Octopus version 5.0.0, www.tddft.org/programs/octopus, from feature for output of isosurface
+of density, wavefunction, or potential from code's internal real-space mesh in 3D-printable format,
+which implements Marching Cubes algorithm for creating isosurface, with linear interpolation. originally by Xavier Andrade.
+Modified to use general mesh of (non-orthogonal) parallelipiped reciprocal lattice vectors, use periodic boundary conditions,
+and allow translation of the cell to close the surface.
