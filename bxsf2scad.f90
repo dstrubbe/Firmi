@@ -130,8 +130,21 @@ contains
 
     write(iunit, '(a)') ' polyhedron( points = [ '
 
+    !OPEN(UNIT=7,FILE="data.txt",FORM="FORMATTED",STATUS="NEW",ACTION="WRITE")
+
     jj = 0
     do ii = 1, poly%npoints
+     
+      !make file, write there      
+     ! WRITE(UNIT=7, FMT = *) poly%points(1, ii)
+      
+
+
+
+
+
+
+
       if(map(poly%point_indices(ii)) == -1) then !skip duplicated points
         write(iunit, '(a,f12.6,a,f12.6,a,f12.6,a,i6)') &
           '[', poly%points(1, ii), ',', poly%points(2, ii), ',',  poly%points(3, ii), '], //', jj
@@ -139,6 +152,11 @@ contains
         jj = jj + 1
       end if
     end do
+    !CLOSE(UNIT=7);
+
+
+
+
 
     write(iunit, '(a)') '], faces = [ '
 
@@ -160,12 +178,19 @@ contains
     integer, intent(in) :: nk(3)
     real*8,  intent(in) :: bvec(3, 3)
 
-    integer :: ip, ii, jp, jj, kk, ll, mm, npoly, curve_res, iunit_scad
+    integer :: ip, ii, jp, jj, kk, ll, mm, npoly, curve_res, iunit_scad, x_shift, y_shift, z_shift, x_best, y_best, z_best
+	real*8 min_distance
     type(polyhedron_t) :: poly
 
     integer, allocatable :: edges(:), triangles(:, :)
     integer :: iunit, cubeindex, cube_point(0:7, 1:3)
     real*8 :: vertlist(1:3, 0:11), vertlist_cart(1:3, 0:11), vertlist0_old(1:3), offset(1:3)
+
+    real*8 :: vert_shift(1:3)
+    real*8 :: summed_shift
+    real*8 :: shifted_distance
+
+	integer :: vert_index
 
     allocate(edges(0:255))
     allocate(triangles(1:16, 0:255))
@@ -187,7 +212,10 @@ contains
     open(unit = iunit_scad, file='bxsf.scad', action = 'write', status='replace')
     curve_res = 50
     write(iunit_scad, '(a,i10,a)') '$fn = ', curve_res, ';'
+ OPEN(UNIT=7,FILE="data.txt",FORM="FORMATTED",STATUS="REPLACE",ACTION="WRITE")
 
+ OPEN(UNIT=8,FILE="old_data.txt",FORM="FORMATTED",STATUS="REPLACE",ACTION="WRITE")
+   
     npoly = 0
     do kk = 1, nk(3)
     do jj = 1, nk(2)
@@ -219,7 +247,8 @@ contains
       if(inside_isolevel(energies, cube_point(6, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 64
       if(inside_isolevel(energies, cube_point(7, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 128
 
-      if(edges(cubeindex) == 0) cycle
+
+     ! if(edges(cubeindex) == 0) cycle
       npoly = npoly + 1
       
       vertlist = 3.333333333333333333d0
@@ -264,6 +293,56 @@ contains
       ! transform to Cartesian coordinates
       vertlist_cart(1:3, 0:11) = matmul(bvec(1:3, 1:3), vertlist(1:3, 0:11))
 
+				
+      !WRITE(UNIT=8, FMT = *) ii, jj, kk
+
+
+	!   a1 a2 a3    x1       a1x1 + a2x2 + a3x3
+	! ( b1 b2 b3 )( x2 )  =  b1x1 + b2x2 + b3x3
+	!   c1 c2 c3    x3       c1x1 + c2x2 + c3x3
+
+	shifted_distance = 10000000
+	!Check reciprocal unit cells on all sides, moving points into unit cell closest to the Brillouin Zone
+	do x_shift = -1, 1
+		do y_shift = -1, 1
+			do z_shift = -1, 1
+				
+				vert_shift(1:3) = nk(1)*(x_shift-.5)*bvec(1,1:3)  + nk(2)*(y_shift-.5)*bvec(2,1:3) + nk(3)*(z_shift-.5)*bvec(3,1:3)
+				summed_shift = sum( (matmul(bvec(1:3, 1:3), (/ii, jj, kk/)) + vert_shift(1:3)) **2)
+				!sum( (vertlist_cart(1:3,0) + vert_shift(1:3)) **2)
+				
+				if (summed_shift < shifted_distance) then
+					
+					shifted_distance = summed_shift
+					
+					x_best = x_shift
+					y_best = y_shift
+					z_best = z_shift
+				end if
+			enddo
+		enddo
+	enddo
+
+	!Move rest of points of triangle to the same location
+	do vert_index = 0, 11
+	vertlist_cart(1:3, vert_index) = &
+!matmul(bvec(1:3, 1:3), (/ii, jj, kk/)) + nk(1)*x_best*bvec(1,1:3) + nk(2)*y_best*bvec(2,1:3) + nk(3)*z_best*bvec(3,1:3)
+vertlist_cart(1:3, vert_index) + nk(1)*x_best*bvec(1,1:3) + nk(2)*y_best*bvec(2,1:3) + nk(3)*z_best*bvec(3,1:3)
+	enddo
+
+	!Testing: Writing to 'old_data.txt'
+	WRITE(UNIT=8, FMT = *) matmul(bvec(1:3, 1:3), (/ii, jj, kk/))
+
+	!Testing: Writing to 'data.txt'					
+     	WRITE(UNIT=7, FMT = *) matmul(bvec(1:3, 1:3), &
+(/ii, jj, kk/)) + nk(1)*x_best*bvec(1,1:3) + nk(2)*y_best*bvec(2,1:3) + nk(3)*z_best*bvec(3,1:3), x_best, y_best, z_best
+
+	!(vertlist_cart(1:3,0))
+
+
+
+
+
       call polyhedron_init(poly)
       ll = 1
       do
@@ -283,7 +362,7 @@ contains
     end do
     enddo
     enddo
-
+   CLOSE(UNIT=7);
     deallocate(edges)
     deallocate(triangles)
     
@@ -341,7 +420,15 @@ program bxsf2scad
     read(iunit_bxsf, *) bvec(1:3, ii)
   enddo
 
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!
+
+
   ! center on Gamma, typically
+  
+
+
   center = nk(1:3) / 2 + nint(dk(1:3))
   
   ! option to select band, Fermi level, filenames?
@@ -367,6 +454,8 @@ program bxsf2scad
         enddo
       enddo
     enddo
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
     ! restore to general grid, after translation
     energies(nk(1), :, :) = energies(1, :, :)
