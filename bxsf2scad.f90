@@ -71,7 +71,7 @@ contains
     x2(1:3) = jk(1:3)
 
     if((v1 - fermi_energy)*(v2 - fermi_energy) > 0) then
-      write(0,*) 'warning, not straddling'
+      write(0,*) 'warning, not straddling', ik, jk, v1, v2
     endif
     ! must be ef is btw v1, v2
     ! note: pos should be close to x1, so do not impose PBCs on the difference vector
@@ -109,7 +109,8 @@ contains
     real*8, intent(in) :: energies(:,:,:)
     integer, intent(in) :: ik(3), nk(3)
     real*8, intent(in) :: fermi_energy
-
+  
+  	!iadjust_bc might be issue to capping:: instead of keeping it within a periodic bounds, if it is too high or too low (< 0 or > nk), set = to 0?
     inside_isolevel = energies(iadjust_bc(ik(1), nk(1)), iadjust_bc(ik(2), nk(2)), iadjust_bc(ik(3), nk(3))) < fermi_energy
   end function inside_isolevel
 
@@ -138,13 +139,6 @@ contains
       !make file, write there      
      ! WRITE(UNIT=7, FMT = *) poly%points(1, ii)
       
-
-
-
-
-
-
-
       if(map(poly%point_indices(ii)) == -1) then !skip duplicated points
         write(iunit, '(a,f12.6,a,f12.6,a,f12.6,a,i6)') &
           '[', poly%points(1, ii), ',', poly%points(2, ii), ',',  poly%points(3, ii), '], //', jj
@@ -153,10 +147,6 @@ contains
       end if
     end do
     !CLOSE(UNIT=7);
-
-
-
-
 
     write(iunit, '(a)') '], faces = [ '
 
@@ -173,13 +163,13 @@ contains
 
   !---------------------------------------------------------------------------
   subroutine out_openscad(energies, fermi_energy, nk, bvec)
-    real*8,  intent(in) :: energies(:, :, :)
+    real*8,  intent(inout) :: energies(:, :, :)
     real*8,  intent(in) :: fermi_energy
     integer, intent(in) :: nk(3)
     real*8,  intent(in) :: bvec(3, 3)
 
     integer :: ip, ii, jp, jj, kk, ll, mm, npoly, curve_res, iunit_scad, x_shift, y_shift, z_shift, x_best, y_best, z_best
-	real*8 min_distance
+    real*8 min_distance
     type(polyhedron_t) :: poly
 
     integer, allocatable :: edges(:), triangles(:, :)
@@ -187,10 +177,15 @@ contains
     real*8 :: vertlist(1:3, 0:11), vertlist_cart(1:3, 0:11), vertlist0_old(1:3), offset(1:3)
 
     real*8 :: vert_shift(1:3)
+    real*8 :: shifted_distances(1:27)
+    integer :: shifted_counter
     real*8 :: summed_shift
     real*8 :: shifted_distance
+    real*8 :: shifted_best
+    integer :: vert_index
 
-	integer :: vert_index
+    real*8 :: adjusted_energies(1:21,1:21,1:21)
+
 
     allocate(edges(0:255))
     allocate(triangles(1:16, 0:255))
@@ -198,7 +193,7 @@ contains
     iunit = 60
     open(unit = iunit, file= "marching_cubes_edges.data", action='read', status='old')
     do ii = 0, 255
-      read(iunit, *) edges(ii)
+       read(iunit, *) edges(ii)
     end do
     close(iunit)
 
@@ -212,166 +207,207 @@ contains
     open(unit = iunit_scad, file='bxsf.scad', action = 'write', status='replace')
     curve_res = 50
     write(iunit_scad, '(a,i10,a)') '$fn = ', curve_res, ';'
- OPEN(UNIT=7,FILE="data.txt",FORM="FORMATTED",STATUS="REPLACE",ACTION="WRITE")
+    OPEN(UNIT=7,FILE="data.txt",FORM="FORMATTED",STATUS="REPLACE",ACTION="WRITE")
+    OPEN(UNIT=8,FILE="old_data.txt",FORM="FORMATTED",STATUS="REPLACE",ACTION="WRITE")
+    OPEN(UNIT=9,FILE="test_data.txt",FORM="FORMATTED",STATUS="REPLACE",ACTION="WRITE")  
 
- OPEN(UNIT=8,FILE="old_data.txt",FORM="FORMATTED",STATUS="REPLACE",ACTION="WRITE")
-   
+    adjusted_energies = energies;
     npoly = 0
     do kk = 1, nk(3)
+      do jj = 1, nk(2)
+        do ii = 1, nk(1)
+          x_best = 0
+          y_best = 0
+          z_best = 0 
+
+          shifted_distance = 10000000
+          shifted_counter = 0
+
+          do x_shift = -1, 1
+		        do y_shift = -1, 1
+              do z_shift = -1, 1
+                vert_shift(1:3) = (nk(1))*(x_shift-.5)*bvec(1:3,1) + nk(2)*(y_shift-.5)*bvec(1:3,2) + nk(3)*(z_shift-.5)*bvec(1:3,3)
+                summed_shift = sum( (matmul(bvec(1:3, 1:3), (/ii, jj, kk/)) + vert_shift(1:3)) **2)
+                shifted_counter = shifted_counter + 1
+                shifted_distances(shifted_counter) = summed_shift				
+                if (summed_shift < shifted_distance) then
+                  shifted_best = shifted_counter
+                  shifted_distance = summed_shift
+                  x_best = x_shift
+                  y_best = y_shift
+                  z_best = z_shift
+                end if
+              enddo
+            enddo
+          enddo
+
+          shifted_counter = 0
+          do shifted_counter = 1,27
+          !      WRITE(UNIT=9, FMT = *) shifted_distance, shifted_best, shifted_counter, shifted_distances(shifted_counter)
+            if (shifted_counter .NE. shifted_best) then 
+              if (abs(sqrt(shifted_distance) -  sqrt(shifted_distances(shifted_counter))) <  10  ) then
+                ! WRITE (UNIT = 9, FMT = *) matmul(bvec(1:3, 1:3), (/ii , jj, kk/)) + (nk(1))*x_best*bvec(1:3,1) + nk(2)*y_best*bvec(1:3,2) + nk(3)*z_best*bvec(1:3,3)        
+                ! 2000 "works" !400 99%, but shape deformation, 600 %99.9
+		            ! WRITE (UNIT = 9, FMT = *) matmul(bvec(1:3, 1:3), (/ii , jj, kk/)) + (nk(1))*x_best*bvec(1:3,1) + nk(2)*y_best*bvec(1:3,2) + nk(3)*z_best*bvec(1:3,3)        
+                if (energies(ii,jj,kk) < fermi_energy) then
+                  energies(ii,jj,kk) = fermi_energy+ 10000
+		              WRITE (UNIT = 8, FMT = *) matmul(bvec(1:3, 1:3), (/ii , jj, kk/)) + (nk(1))*x_best*bvec(1:3,1) + nk(2)*y_best*bvec(1:3,2) + nk(3)*z_best*bvec(1:3,3)
+                  !WRITE(UNIT=9, FMT = *) 
+                else
+                  WRITE (UNIT = 9, FMT = *) matmul(bvec(1:3, 1:3), (/ii , jj, kk/)) + (nk(1))*x_best*bvec(1:3,1) + nk(2)*y_best*bvec(1:3,2) + nk(3)*z_best*bvec(1:3,3)
+                end if
+              end if
+            end if
+          enddo
+        enddo
+      enddo
+  enddo
+  do kk = 1, nk(3)
     do jj = 1, nk(2)
-    do ii = 1, nk(1)   
+      do ii = 1, nk(1)
+        ! these are allowed to go out of bounds, i.e. be 0 or nk(ii) + 1
+        cube_point(0, :) = (/ii    , jj    , kk    /)
+        cube_point(1, :) = (/ii    , jj + 1, kk    /)
+        cube_point(2, :) = (/ii + 1, jj + 1, kk    /)
+        cube_point(3, :) = (/ii + 1, jj    , kk    /)
+        cube_point(4, :) = (/ii    , jj    , kk + 1/)
+        cube_point(5, :) = (/ii    , jj + 1, kk + 1/)
+        cube_point(6, :) = (/ii + 1, jj + 1, kk + 1/)
+        cube_point(7, :) = (/ii + 1, jj    , kk + 1/)
 
-      ! these are allowed to go out of bounds, i.e. be 0 or nk(ii) + 1
-      cube_point(0, :) = (/ii    , jj    , kk    /)
-      cube_point(1, :) = (/ii    , jj + 1, kk    /)
-      cube_point(2, :) = (/ii + 1, jj + 1, kk    /)
-      cube_point(3, :) = (/ii + 1, jj    , kk    /)
-      cube_point(4, :) = (/ii    , jj    , kk + 1/)
-      cube_point(5, :) = (/ii    , jj + 1, kk + 1/)
-      cube_point(6, :) = (/ii + 1, jj + 1, kk + 1/)
-      cube_point(7, :) = (/ii + 1, jj    , kk + 1/)
+        ! all non-straddling warnings seemed to come from when this was not satisfied
+        !     if(any(cube_point(:,:) <= 0)) cycle
+        !     do ll = 1, 3
+        !       if(any(cube_point(:,ll) > nk(ll))) cycle
+        !     enddo
 
-      ! all non-straddling warnings seemed to come from when this was not satisfied
-!      if(any(cube_point(:,:) <= 0)) cycle
-!      do ll = 1, 3
-!        if(any(cube_point(:,ll) > nk(ll))) cycle
-!      enddo
-      
-      cubeindex = 0
-      if(inside_isolevel(energies, cube_point(0, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 1
-      if(inside_isolevel(energies, cube_point(1, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 2
-      if(inside_isolevel(energies, cube_point(2, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 4
-      if(inside_isolevel(energies, cube_point(3, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 8
-      if(inside_isolevel(energies, cube_point(4, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 16
-      if(inside_isolevel(energies, cube_point(5, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 32
-      if(inside_isolevel(energies, cube_point(6, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 64
-      if(inside_isolevel(energies, cube_point(7, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 128
+        cubeindex = 0
+        if(inside_isolevel(energies, cube_point(0, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 1
+        if(inside_isolevel(energies, cube_point(1, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 2
+        if(inside_isolevel(energies, cube_point(2, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 4
+        if(inside_isolevel(energies, cube_point(3, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 8
+        if(inside_isolevel(energies, cube_point(4, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 16
+        if(inside_isolevel(energies, cube_point(5, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 32
+        if(inside_isolevel(energies, cube_point(6, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 64
+        if(inside_isolevel(energies, cube_point(7, :), nk(1:3), fermi_energy)) cubeindex = cubeindex + 128
 
+        ! if(edges(cubeindex) == 0) cycle
+        npoly = npoly + 1
 
-     ! if(edges(cubeindex) == 0) cycle
-      npoly = npoly + 1
-      
-      vertlist = 3.333333333333333333d0
+        vertlist = 3.333333333333333333d0
 
-      if(iand(edges(cubeindex), 1) /= 0) then
-        vertlist(1:3, 0) = interpolate_isolevel(energies, fermi_energy, cube_point(0, :), cube_point(1, :), nk)
-      end if
-      if(iand(edges(cubeindex), 2) /= 0) then
-        vertlist(1:3, 1) = interpolate_isolevel(energies, fermi_energy, cube_point(1, :), cube_point(2, :), nk)
-      end if
-      if(iand(edges(cubeindex), 4) /= 0) then
-        vertlist(1:3, 2) = interpolate_isolevel(energies, fermi_energy, cube_point(2, :), cube_point(3, :), nk)
-      end if
-      if(iand(edges(cubeindex), 8) /= 0) then
-        vertlist(1:3, 3) = interpolate_isolevel(energies, fermi_energy, cube_point(3, :), cube_point(0, :), nk)
-      end if
-      if(iand(edges(cubeindex), 16) /= 0) then
-        vertlist(1:3, 4) = interpolate_isolevel(energies, fermi_energy, cube_point(4, :), cube_point(5, :), nk)
-      end if
-      if(iand(edges(cubeindex), 32) /= 0) then
-        vertlist(1:3, 5) = interpolate_isolevel(energies, fermi_energy, cube_point(5, :), cube_point(6, :), nk)
-      end if
-      if(iand(edges(cubeindex), 64) /= 0) then
-        vertlist(1:3, 6) = interpolate_isolevel(energies, fermi_energy, cube_point(6, :), cube_point(7, :), nk)
-      end if
-      if(iand(edges(cubeindex), 128) /= 0) then
-        vertlist(1:3, 7) = interpolate_isolevel(energies, fermi_energy, cube_point(7, :), cube_point(4, :), nk)
-      end if
-      if(iand(edges(cubeindex), 256) /= 0) then
-        vertlist(1:3, 8) = interpolate_isolevel(energies, fermi_energy, cube_point(0, :), cube_point(4, :), nk)
-      end if
-      if(iand(edges(cubeindex), 512) /= 0) then
-        vertlist(1:3, 9) = interpolate_isolevel(energies, fermi_energy, cube_point(1, :), cube_point(5, :), nk)
-      end if
-      if(iand(edges(cubeindex), 1024) /= 0) then
-        vertlist(1:3, 10) = interpolate_isolevel(energies, fermi_energy, cube_point(2, :), cube_point(6, :), nk)
-      end if
-      if(iand(edges(cubeindex), 2048) /= 0) then
-        vertlist(1:3, 11) = interpolate_isolevel(energies, fermi_energy, cube_point(3, :), cube_point(7, :), nk)
-      end if
+        if(iand(edges(cubeindex), 1) /= 0) then
+           vertlist(1:3, 0) = interpolate_isolevel(energies, fermi_energy, cube_point(0, :), cube_point(1, :), nk)
+        end if
+        if(iand(edges(cubeindex), 2) /= 0) then
+           vertlist(1:3, 1) = interpolate_isolevel(energies, fermi_energy, cube_point(1, :), cube_point(2, :), nk)
+        end if
+        if(iand(edges(cubeindex), 4) /= 0) then
+           vertlist(1:3, 2) = interpolate_isolevel(energies, fermi_energy, cube_point(2, :), cube_point(3, :), nk)
+        end if
+        if(iand(edges(cubeindex), 8) /= 0) then
+           vertlist(1:3, 3) = interpolate_isolevel(energies, fermi_energy, cube_point(3, :), cube_point(0, :), nk)
+        end if
+        if(iand(edges(cubeindex), 16) /= 0) then
+           vertlist(1:3, 4) = interpolate_isolevel(energies, fermi_energy, cube_point(4, :), cube_point(5, :), nk)
+        end if
+        if(iand(edges(cubeindex), 32) /= 0) then
+           vertlist(1:3, 5) = interpolate_isolevel(energies, fermi_energy, cube_point(5, :), cube_point(6, :), nk)
+        end if
+        if(iand(edges(cubeindex), 64) /= 0) then
+           vertlist(1:3, 6) = interpolate_isolevel(energies, fermi_energy, cube_point(6, :), cube_point(7, :), nk)
+        end if
+        if(iand(edges(cubeindex), 128) /= 0) then
+           vertlist(1:3, 7) = interpolate_isolevel(energies, fermi_energy, cube_point(7, :), cube_point(4, :), nk)
+        end if
+        if(iand(edges(cubeindex), 256) /= 0) then
+           vertlist(1:3, 8) = interpolate_isolevel(energies, fermi_energy, cube_point(0, :), cube_point(4, :), nk)
+        end if
+        if(iand(edges(cubeindex), 512) /= 0) then
+           vertlist(1:3, 9) = interpolate_isolevel(energies, fermi_energy, cube_point(1, :), cube_point(5, :), nk)
+        end if
+        if(iand(edges(cubeindex), 1024) /= 0) then
+           vertlist(1:3, 10) = interpolate_isolevel(energies, fermi_energy, cube_point(2, :), cube_point(6, :), nk)
+        end if
+        if(iand(edges(cubeindex), 2048) /= 0) then
+           vertlist(1:3, 11) = interpolate_isolevel(energies, fermi_energy, cube_point(3, :), cube_point(7, :), nk)
+        end if
 
-      ! transform to Cartesian coordinates
-      vertlist_cart(1:3, 0:11) = matmul(bvec(1:3, 1:3), vertlist(1:3, 0:11))
-
-				
-      !WRITE(UNIT=8, FMT = *) ii, jj, kk
+        ! transform to Cartesian coordinates
+        vertlist_cart(1:3, 0:11) = matmul(bvec(1:3, 1:3), vertlist(1:3, 0:11))
 
 
-	!   a1 a2 a3    x1       a1x1 + a2x2 + a3x3
-	! ( b1 b2 b3 )( x2 )  =  b1x1 + b2x2 + b3x3
-	!   c1 c2 c3    x3       c1x1 + c2x2 + c3x3
-
-	shifted_distance = 10000000
-	!Check reciprocal unit cells on all sides, moving points into unit cell closest to the Brillouin Zone
-	do x_shift = -1, 1
-		do y_shift = -1, 1
-			do z_shift = -1, 1
-				
-				vert_shift(1:3) = nk(1)*(x_shift-.5)*bvec(1,1:3)  + nk(2)*(y_shift-.5)*bvec(2,1:3) + nk(3)*(z_shift-.5)*bvec(3,1:3)
-				summed_shift = sum( (matmul(bvec(1:3, 1:3), (/ii, jj, kk/)) + vert_shift(1:3)) **2)
-				!sum( (vertlist_cart(1:3,0) + vert_shift(1:3)) **2)
-				
-				if (summed_shift < shifted_distance) then
-					
-					shifted_distance = summed_shift
-					
-					x_best = x_shift
-					y_best = y_shift
-					z_best = z_shift
-				end if
-			enddo
-		enddo
-	enddo
-
-	!Move rest of points of triangle to the same location
-	do vert_index = 0, 11
-	vertlist_cart(1:3, vert_index) = &
-!matmul(bvec(1:3, 1:3), (/ii, jj, kk/)) + nk(1)*x_best*bvec(1,1:3) + nk(2)*y_best*bvec(2,1:3) + nk(3)*z_best*bvec(3,1:3)
-vertlist_cart(1:3, vert_index) + nk(1)*x_best*bvec(1,1:3) + nk(2)*y_best*bvec(2,1:3) + nk(3)*z_best*bvec(3,1:3)
-	enddo
-
-	!Testing: Writing to 'old_data.txt'
-	WRITE(UNIT=8, FMT = *) matmul(bvec(1:3, 1:3), (/ii, jj, kk/))
-
-	!Testing: Writing to 'data.txt'					
-     	WRITE(UNIT=7, FMT = *) matmul(bvec(1:3, 1:3), &
-(/ii, jj, kk/)) + nk(1)*x_best*bvec(1,1:3) + nk(2)*y_best*bvec(2,1:3) + nk(3)*z_best*bvec(3,1:3), x_best, y_best, z_best
-
-	!(vertlist_cart(1:3,0))
+        !WRITE(UNIT=8, FMT = *) ii, jj, kk
 
 
+        !   a1 a2 a3    x1       a1x1 + a2x2 + a3x3
+        ! ( b1 b2 b3 )( x2 )  =  b1x1 + b2x2 + b3x3
+        !   c1 c2 c3    x3       c1x1 + c2x2 + c3x3
+        
+        x_best = 0
+        y_best = 0
+        z_best = 0 
+        shifted_distance = 10000000
+        !Check reciprocal unit cells on all sides, moving points into unit cell closest to the Brillouin Zone
+        do x_shift = -1, 1
+      	  do y_shift = -1, 1
+            do z_shift = -1, 1
+              vert_shift(1:3) = (nk(1))*(x_shift-.5)*bvec(1:3,1) + nk(2)*(y_shift-.5)*bvec(1:3,2) + nk(3)*(z_shift-.5)*bvec(1:3,3)
+              summed_shift = sum( (matmul(bvec(1:3, 1:3), (/ii, jj, kk/)) + vert_shift(1:3)) **2)
+              if (summed_shift < shifted_distance) then
+                shifted_distance = summed_shift
+                x_best = x_shift
+                y_best = y_shift
+                z_best = z_shift
+              end if
+            enddo
+          enddo
+        enddo
+
+        !WRITE (UNIT = 9, FMT = *) summed_shift
+        !WRITE (UNIT = 9, FMT = *) matmul(bvec(1:3, 1:3), (/ii, jj, kk/)) + (nk(1))*x_best*bvec(1:3,1) + nk(2)*y_best*bvec(1:3,2) + nk(3)*z_best*bvec(1:3,3)        
+
+        !Move rest of points of triangle to the same location
+        do vert_index = 0, 11
+          vertlist_cart(1:3, vert_index) = &
+          vertlist_cart(1:3, vert_index) + (nk(1))*x_best*bvec(1:3,1) + nk(2)*y_best*bvec(1:3,2) + nk(3)*z_best*bvec(1:3,3)
+        enddo
+             
+        !Testing: Writing to 'old_data.txt'
+        !WRITE(UNIT=8, FMT = *) matmul(bvec(1:3, 1:3), (/ii, jj, kk/))
 
 
+        !Testing: Writing to 'data.txt'					
+        !WRITE(UNIT=7, FMT = *) vertlist_cart(1:3,0) !matmul(bvec(1:3, 1:3), (/ii , jj, kk/)) &
+        ! + (nk(1))*x_best*bvec(1:3,1) + nk(2)*y_best*bvec(1:3,2) + nk(3)*z_best*bvec(1:3,3)
 
-      call polyhedron_init(poly)
-      ll = 1
-      do
-        if(triangles(ll, cubeindex) == -1) exit
-
-        call polyhedron_add_point(poly, triangles(ll    , cubeindex), vertlist_cart(1:3, triangles(ll    , cubeindex)))
-        call polyhedron_add_point(poly, triangles(ll + 1, cubeindex), vertlist_cart(1:3, triangles(ll + 1, cubeindex)))
-        call polyhedron_add_point(poly, triangles(ll + 2, cubeindex), vertlist_cart(1:3, triangles(ll + 2, cubeindex)))
-        call polyhedron_add_triangle(poly, triangles(ll:ll + 2, cubeindex))
-
-        ll = ll + 3
+        call polyhedron_init(poly)
+        ll = 1
+        do
+          if(triangles(ll, cubeindex) == -1) exit
+          call polyhedron_add_point(poly, triangles(ll    , cubeindex), vertlist_cart(1:3, triangles(ll    , cubeindex)))
+          call polyhedron_add_point(poly, triangles(ll + 1, cubeindex), vertlist_cart(1:3, triangles(ll + 1, cubeindex)))
+          call polyhedron_add_point(poly, triangles(ll + 2, cubeindex), vertlist_cart(1:3, triangles(ll + 2, cubeindex)))
+          call polyhedron_add_triangle(poly, triangles(ll:ll + 2, cubeindex))
+          ll = ll + 3
+        end do
+        call openscad_file_polyhedron(iunit_scad, poly)
+        call polyhedron_end(poly)
       end do
-
-      call openscad_file_polyhedron(iunit_scad, poly)
-      call polyhedron_end(poly)
-
-    end do
     enddo
-    enddo
-   CLOSE(UNIT=7);
-    deallocate(edges)
-    deallocate(triangles)
-    
-    close(iunit_scad)
-    write(6,'(a,i9,a,a)') ' Wrote ', npoly, ' polyhedra to ', "scad"
+  enddo
+  CLOSE(UNIT=7);
+  CLOSE(UNIT=8);
+  CLOSE(UNIT=9);
+  deallocate(edges)
+  deallocate(triangles)
 
-    if(npoly == 0) then
-      write(0,*) "There were no points inside the isosurface for OpenSCAD output."
-    endif
+  close(iunit_scad)
+  write(6,'(a,i9,a,a)') ' Wrote ', npoly, ' polyhedra to ', "scad"
+
+  if(npoly == 0) then
+    write(0,*) "There were no points inside the isosurface for OpenSCAD output."
+  endif
 
   end subroutine out_openscad
 
@@ -386,7 +422,7 @@ program bxsf2scad
 
   ! question: how can you close the pores on the edges of the Fermi surface?
 
-  integer :: iunit_bxsf, iunit_scad, nbands, nk(3), ii, iband, ix, iy, iz, ix_, iy_, iz_
+  integer :: iunit_bxsf, iunit_scad, nbands, nk(3), ii, jj, kk, iband, ix, iy, iz, ix_, iy_, iz_
   real*8 :: dk(3), bvec(3, 3), fermi_energy, dummy
   real*8, allocatable :: energies(:, :, :), energies_general(:, :, :)
   character*256 :: line, line_trim, word
@@ -456,6 +492,19 @@ program bxsf2scad
     enddo
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+    !Looking into adding padding around edge of zone to close caps. Didn't work too well, needed edge-casing...
+    do kk = 1, nk(3)
+      do jj = 1, nk(2)
+        do ii = 1, nk(1)
+          if (ii == 1 .or. jj == 1 .or. kk == 1 .or. ii == 20 .or. jj == 20 .or. kk == 20) then
+            !energies(ii, jj, kk) = 0     
+          end if 
+        enddo
+      enddo
+    enddo
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!11
 
     ! restore to general grid, after translation
     energies(nk(1), :, :) = energies(1, :, :)
